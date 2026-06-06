@@ -1,0 +1,36 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File with Arguments",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": "${command:pickArgs}"
+        },
+        {
+            "name": "ch03: real provider (openai)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/ch03_real_provider.py",
+            "console": "integratedTerminal",
+            "env": {
+                "PROVIDER": "openai"
+            }
+        },
+        {
+            "name": "ch04: tools (openai)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/ch04_tools.py",
+            "console": "integratedTerminal",
+            "env": {
+                "PROVIDER": "openai"
+            }
+        }
+    ]
+}
