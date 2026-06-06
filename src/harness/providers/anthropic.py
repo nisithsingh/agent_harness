@@ -1,14 +1,16 @@
-# src/harness/providers/anthropic.py
+# src/harness/providers/anthropic.py (updated)
 from __future__ import annotations
 
-import os
-from typing import Any
+from typing import Any, AsyncIterator
 
+from .events import (
+    Completed, ReasoningDelta, StreamEvent,
+    TextDelta, ToolCallDelta, ToolCallStart,
+)
+from .base import Provider, ProviderResponse, accumulate
 from ..messages import (
     Block, Message, ReasoningBlock, TextBlock, ToolCall, ToolResult, Transcript,
 )
-from .base import Provider, ProviderResponse
-
 
 class AnthropicProvider(Provider):
     name = "anthropic"
@@ -23,14 +25,14 @@ class AnthropicProvider(Provider):
         self.thinking_budget_tokens = thinking_budget_tokens
         self.max_tokens = max_tokens
         if client is None:
-            # Import the specific symbol (not `import anthropic`) so there's no
-            # ambiguity with this module's own name, `harness.providers.anthropic`.
-            from anthropic import Anthropic  # external SDK
-            client = Anthropic()
+            from anthropic import AsyncAnthropic  # external SDK
+            client = AsyncAnthropic()
         self._client = client
 
-    def complete(self, transcript: Transcript, tools: list[dict]) -> ProviderResponse:
-        kwargs: dict[str, Any] = {
+    async def astream(
+        self, transcript: Transcript, tools: list[dict]
+    ) -> AsyncIterator[StreamEvent]:
+        kwargs: dict = {
             "model": self.model,
             "max_tokens": self.max_tokens,
             "messages": [_to_anthropic(m, self.enable_thinking)
@@ -44,13 +46,47 @@ class AnthropicProvider(Provider):
                 "type": "enabled",
                 "budget_tokens": self.thinking_budget_tokens,
             }
-        # Parallel tool use stays on (Anthropic's default). Chapter 5's
-        # `accumulate` collects every tool_use into `ProviderResponse.tool_calls`,
-        # and the loop dispatches them sequentially in arrival order.
+        # Parallel tool use stays on (Anthropic's default). `accumulate`
+        # handles the batch; the loop dispatches each call sequentially.
 
-        raw = self._client.messages.create(**kwargs)
-        return _from_anthropic(raw)
+        current_tool_id: str | None = None
+        async with self._client.messages.stream(**kwargs) as stream:
+            async for raw in stream:
+                event = _translate(raw, current_tool_id)
+                if isinstance(event, ToolCallStart):
+                    current_tool_id = event.id
+                if event is not None:
+                    yield event
 
+            final = await stream.get_final_message()
+            yield Completed(
+                input_tokens=final.usage.input_tokens,
+                output_tokens=final.usage.output_tokens,
+            )
+
+    async def acomplete(self, transcript, tools):
+        return await accumulate(self.astream(transcript, tools))
+
+
+def _translate(raw: Any, current_tool_id: str | None) -> StreamEvent | None:
+    t = raw.type
+    if t == "content_block_start" and raw.content_block.type == "tool_use":
+        return ToolCallStart(id=raw.content_block.id, name=raw.content_block.name)
+    if t == "content_block_delta":
+        d = raw.delta
+        if d.type == "text_delta":
+            return TextDelta(text=d.text)
+        if d.type == "thinking_delta":
+            return ReasoningDelta(text=d.thinking)
+        if d.type == "signature_delta":
+            return None  # the signature lands on the final message, not a stream event
+        if d.type == "input_json_delta":
+            return ToolCallDelta(id=current_tool_id or "",
+                                 args_fragment=d.partial_json)
+    return None
+
+# _to_anthropic unchanged from Chapter 3 (it already handles ReasoningBlock
+# and the keep_reasoning flag for round-tripping thinking on/off).
 
 def _to_anthropic(message: Message, keep_reasoning: bool) -> dict:
     # Drop ReasoningBlocks when thinking isn't enabled — the API rejects
@@ -62,7 +98,6 @@ def _to_anthropic(message: Message, keep_reasoning: bool) -> dict:
             continue
         content.append(_block_to_anthropic(block))
     return {"role": message.role, "content": content}
-
 
 def _block_to_anthropic(block: Block) -> dict:
     match block:
@@ -78,31 +113,3 @@ def _block_to_anthropic(block: Block) -> dict:
             if (sig := meta.get("signature")) is not None:
                 out["signature"] = sig  # required on round-trip
             return out
-
-
-def _from_anthropic(raw: Any) -> ProviderResponse:
-    # Gather any thinking trace first — it may accompany either a tool_use
-    # or a text answer, and we want to preserve it on ProviderResponse so
-    # the loop's `Message.from_assistant_response` puts it in the transcript.
-    thinking_texts = [b.thinking for b in raw.content if b.type == "thinking"]
-    reasoning_text = "\n".join(thinking_texts) if thinking_texts else None
-
-    for block in raw.content:
-        if block.type == "tool_use":
-            return ProviderResponse(
-                tool_call_id=block.id,
-                tool_name=block.name,
-                tool_args=dict(block.input),
-                reasoning_text=reasoning_text,
-                input_tokens=raw.usage.input_tokens,
-                output_tokens=raw.usage.output_tokens,
-            )
-
-    # No tool call → concatenate text blocks for the final answer.
-    texts = [b.text for b in raw.content if b.type == "text"]
-    return ProviderResponse(
-        text="\n".join(texts),
-        reasoning_text=reasoning_text,
-        input_tokens=raw.usage.input_tokens,
-        output_tokens=raw.usage.output_tokens,
-    )

@@ -31,6 +31,26 @@
             "env": {
                 "PROVIDER": "openai"
             }
+        },
+        {
+            "name": "ch05: multi_turn (openai)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/ch05_multi_turn.py",
+            "console": "integratedTerminal",
+            "env": {
+                "PROVIDER": "openai"
+            }
+        },
+        {
+            "name": "ch05: ch05_interruptible (openai)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/ch05_interruptible.py",
+            "console": "integratedTerminal",
+            "env": {
+                "PROVIDER": "openai"
+            }
         }
     ]
 }
