@@ -109,9 +109,14 @@ class Message:
         if reasoning is not None:
             blocks.append(reasoning)
         if response.is_tool_call:
-            blocks.append(ToolCall(id=response.tool_call_id or "",
-                                   name=response.tool_name,
-                                   args=dict(response.tool_args or {})))
+            # One ToolCall block per call — the model may emit several in
+            # parallel, and the loop appends a tool_result for each. Emitting
+            # only tool_calls[0] here would leave the extra results orphaned,
+            # which providers reject ("no tool call found for call_id ...").
+            for ref in response.tool_calls:
+                blocks.append(ToolCall(id=ref.id,
+                                       name=ref.name,
+                                       args=dict(ref.args)))
         else:
             blocks.append(TextBlock(text=response.text or ""))
         return cls(role="assistant", blocks=blocks)
